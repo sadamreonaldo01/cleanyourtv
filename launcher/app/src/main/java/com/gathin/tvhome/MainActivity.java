@@ -2247,7 +2247,78 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    private TextView prayerNext;
+    private final Runnable prayerTick = this::updatePrayer;
+
+    private android.widget.LinearLayout prayerRow;
+    private final android.widget.LinearLayout[] prayerCols = new android.widget.LinearLayout[6];
+    private final TextView[] prayerTimeViews = new TextView[6];
+    private int prayerHighlight = -1;
+
+    private void buildPrayerRow() {
+        prayerRow = findViewById(R.id.prayerRow);
+        if (prayerRow == null) return;
+        float d = getResources().getDisplayMetrics().density;
+        for (int i = 0; i < 6; i++) {
+            android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+            col.setOrientation(android.widget.LinearLayout.VERTICAL);
+            col.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            col.setPadding((int) (10 * d), (int) (6 * d), (int) (10 * d), (int) (6 * d));
+            TextView n = new TextView(this);
+            n.setText(PrayerTimes.name(i));
+            n.setTextColor(0x99FFFFFF);
+            n.setTextSize(11f);
+            n.setLetterSpacing(0.1f);
+            TextView t = new TextView(this);
+            t.setTextColor(0xFFFFFFFF);
+            t.setTextSize(15f);
+            col.addView(n);
+            col.addView(t);
+            prayerRow.addView(col);
+            prayerCols[i] = col;
+            prayerTimeViews[i] = t;
+        }
+    }
+
+    private android.graphics.drawable.GradientDrawable prayerBox() {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        float d = getResources().getDisplayMetrics().density;
+        g.setCornerRadius(10 * d);
+        g.setColor(0x26FFFFFF);
+        g.setStroke((int) Math.max(1f, d), 0x66FFFFFF);
+        return g;
+    }
+
+    private void updatePrayer() {
+        if (prayerNext == null) prayerNext = findViewById(R.id.prayerNext);
+        if (prayerRow == null) buildPrayerRow();
+        try {
+            double[] t = PrayerTimes.today();
+            double now = PrayerTimes.nowMinutes();
+            int nx = PrayerTimes.nextIndex(t, now);
+            if (prayerRow != null) {
+                for (int i = 0; i < 6; i++) prayerTimeViews[i].setText(PrayerTimes.hm(t[i]));
+                if (prayerHighlight != nx) {
+                    for (int i = 0; i < 6; i++) prayerCols[i].setBackground(i == nx ? prayerBox() : null);
+                    prayerHighlight = nx;
+                }
+            }
+            if (prayerNext != null) {
+                int mins = PrayerTimes.minutesUntil(nx, t, now);
+                String left = mins >= 60 ? (mins / 60) + " j " + (mins % 60) + " mnt" : mins + " mnt";
+                String nm = PrayerTimes.name(nx);
+                nm = nm.charAt(0) + nm.substring(1).toLowerCase(java.util.Locale.ROOT);
+                prayerNext.setTransformationMethod(null);
+                prayerNext.setText("Batam  \u00b7  " + nm + " dalam " + left);
+            }
+        } catch (RuntimeException ignored) {
+        }
+        handler.removeCallbacks(prayerTick);
+        handler.postDelayed(prayerTick, 30000L);
+    }
+
     private void updateGreeting() {
+        updatePrayer();
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
         int res;
         // Locale-specific day parts (app language on Android 13+).
