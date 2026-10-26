@@ -1687,6 +1687,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return scrim;
     }
 
+    /** Own artwork per app: files/appbg/<package>.jpg, or null when there is none. */
+    private Bitmap loadAppBg(int position) {
+        try {
+            String pkg = adapter.packageAt(position);
+            if (pkg == null) return null;
+            java.io.File dir = getExternalFilesDir(null);
+            if (dir == null) return null;
+            java.io.File f = new java.io.File(new java.io.File(dir, "appbg"), pkg + ".jpg");
+            if (!f.isFile()) return null;
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+            int sample = 1;
+            while (o.outWidth / (sample * 2) >= 960) sample *= 2;
+            o = new android.graphics.BitmapFactory.Options();
+            o.inSampleSize = sample;
+            return android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+        } catch (RuntimeException | OutOfMemoryError e) {
+            return null;
+        }
+    }
+
     /** Swaps the backdrop to this app's artwork: fade out, swap, fade in, the way the shelf's name changes. */
     private void showHeroArt(int position) {
         String key = adapter.keyAt(position);
@@ -1698,7 +1720,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         Bitmap art = heroArtCache.get(key);
         if (art == null) {
-            art = HeroArt.from(adapter.artworkAt(position));
+            art = loadAppBg(position);
+            if (art == null) art = HeroArt.from(adapter.artworkAt(position));
             if (art != null) heroArtCache.put(key, art);
         }
         heroArtKey = key;
