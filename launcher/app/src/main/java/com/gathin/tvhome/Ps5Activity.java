@@ -186,34 +186,18 @@ public class Ps5Activity extends Activity {
         }
     }
 
-    private void cleanMemory() {
+    private void showMemory() {
         android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
-        if (am == null) return;
         android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
-        am.getMemoryInfo(mi);
-        final long before = mi.availMem;
-        for (ResolveInfo r : allApps) {
-            String p = r.activityInfo.packageName;
-            if (p.equals(getPackageName())) continue;
-            android.content.pm.ApplicationInfo ai = r.activityInfo.applicationInfo;
-            boolean system = (ai.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
-                    && (ai.flags & android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-            if (system) continue;
-            try { am.killBackgroundProcesses(p); } catch (RuntimeException ignored) { }
-        }
-        cache.clear();
+        if (am != null) am.getMemoryInfo(mi);
+        long mb = 1024L * 1024L;
+        String msg = "RAM bebas " + (mi.availMem / mb) + " dari " + (mi.totalMem / mb) + " MB";
         try {
-            File[] fs = getCacheDir().listFiles();
-            if (fs != null) for (File f : fs) f.delete();
+            android.os.StatFs st = new android.os.StatFs(android.os.Environment.getDataDirectory().getPath());
+            msg += "  \u00b7  Penyimpanan bebas " + (st.getAvailableBytes() / mb) + " dari "
+                    + (st.getTotalBytes() / mb) + " MB";
         } catch (RuntimeException ignored) { }
-        h.postDelayed(() -> {
-            android.app.ActivityManager.MemoryInfo m2 = new android.app.ActivityManager.MemoryInfo();
-            am.getMemoryInfo(m2);
-            long now = m2.availMem / (1024 * 1024);
-            long freed = Math.max(0, (m2.availMem - before) / (1024 * 1024));
-            android.widget.Toast.makeText(this, "Selesai. Memori bebas " + now + " MB (+" + freed + " MB)",
-                    android.widget.Toast.LENGTH_LONG).show();
-        }, 1500);
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show();
     }
 
     private TextView pill(String label, Runnable r) {
@@ -282,11 +266,26 @@ public class Ps5Activity extends Activity {
         return b;
     }
 
+    /** Slow zoom on the backdrop; set to 1f to switch it off. */
+    private static final float ZOOM = 1.07f;
+    private android.animation.ObjectAnimator zoomAnim;
+
     private void setBg(Bitmap b) {
         bg.animate().cancel();
+        if (zoomAnim != null) zoomAnim.cancel();
         bg.animate().alpha(0f).setDuration(110).withEndAction(() -> {
             bg.setImageBitmap(b);
+            bg.setScaleX(1f);
+            bg.setScaleY(1f);
             bg.animate().alpha(1f).setDuration(260).start();
+            if (ZOOM > 1f && b != null) {
+                zoomAnim = android.animation.ObjectAnimator.ofPropertyValuesHolder(bg,
+                        android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, ZOOM),
+                        android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, ZOOM));
+                zoomAnim.setDuration(14000);
+                zoomAnim.setInterpolator(new android.view.animation.LinearInterpolator());
+                zoomAnim.start();
+            }
         }).start();
     }
 
@@ -369,9 +368,9 @@ public class Ps5Activity extends Activity {
         FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         tp.setMargins(0, dp(30), dp(48), 0);
         root.addView(top, tp);
-        String[] names = {"Input", "Wi-Fi", "Pindah", "Setelan", "Bersihkan"};
+        String[] names = {"Input", "Wi-Fi", "Pindah", "Setelan", "Memori"};
         Runnable[] acts = {this::openInputs, () -> go("android.settings.WIFI_SETTINGS"),
-                this::startReorder, () -> go("android.settings.SETTINGS"), this::cleanMemory};
+                this::startReorder, () -> go("android.settings.SETTINGS"), this::showMemory};
         for (int i = 0; i < 5; i++) {
             LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-2, -2);
             pl.leftMargin = dp(10);
@@ -504,6 +503,11 @@ public class Ps5Activity extends Activity {
         h.postDelayed(tick, 30000L);
     }
 
+    /** As the Home screen, Back must not close it. */
+    @Override public void onBackPressed() {
+        if (reorderMode) endReorder();
+    }
+
     @Override protected void onResume() {
         super.onResume();
         refreshPrayer();
@@ -511,6 +515,7 @@ public class Ps5Activity extends Activity {
 
     @Override protected void onPause() {
         h.removeCallbacks(tick);
+        if (zoomAnim != null) zoomAnim.cancel();
         super.onPause();
     }
 }
