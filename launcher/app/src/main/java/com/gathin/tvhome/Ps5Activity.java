@@ -41,6 +41,14 @@ public class Ps5Activity extends Activity {
     private final LinearLayout[] pCol = new LinearLayout[6];
     private RecyclerView row;
     private int selected = -1, lit = -1;
+    private boolean reorderMode, toolsTab;
+    private final List<ResolveInfo> allApps = new ArrayList<>();
+    private TextView tabApps, tabTools;
+    private android.content.SharedPreferences prefs;
+    private List<String> saved = new ArrayList<>();
+    private static final Set<String> TOOLS = new HashSet<>(Arrays.asList(
+            "com.cxinventor.file.explorer", "com.yablio.sendfilestotv", "com.android.tv.settings",
+            "rcota.android.av.sharp.co.jp.rcota", "com.mediatek.wwtv.mediaplayer"));
     private final Handler h = new Handler(Looper.getMainLooper());
     private final Runnable tick = this::refreshPrayer;
 
@@ -84,10 +92,156 @@ public class Ps5Activity extends Activity {
             }
         }
         Collections.sort(apps, (a, b) -> {
-            int x = rank(a.activityInfo.packageName), y = rank(b.activityInfo.packageName);
+            int x = order(a.activityInfo.packageName), y = order(b.activityInfo.packageName);
             if (x != y) return x - y;
             return String.valueOf(a.loadLabel(pm)).compareToIgnoreCase(String.valueOf(b.loadLabel(pm)));
         });
+        allApps.clear();
+        allApps.addAll(apps);
+        applyTab();
+    }
+
+    private int order(String p) {
+        int i = saved.indexOf(p);
+        return i >= 0 ? i : 1000 + rank(p);
+    }
+
+    private void applyTab() {
+        apps.clear();
+        for (ResolveInfo r : allApps) {
+            if (TOOLS.contains(r.activityInfo.packageName) == toolsTab) apps.add(r);
+        }
+    }
+
+    private void saveOrder() {
+        StringBuilder sb = new StringBuilder();
+        for (ResolveInfo r : allApps) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(r.activityInfo.packageName);
+        }
+        prefs.edit().putString("order", sb.toString()).apply();
+    }
+
+    private void startReorder() {
+        if (apps.isEmpty() || selected < 0) return;
+        reorderMode = true;
+        sub.setText("Mode pindah: kiri/kanan untuk geser, OK untuk selesai");
+        RecyclerView.ViewHolder vh = row.findViewHolderForAdapterPosition(selected);
+        if (vh != null) vh.itemView.requestFocus();
+    }
+
+    private void endReorder() {
+        reorderMode = false;
+        saveOrder();
+        sub.setText("Tekan OK untuk membuka");
+    }
+
+    private void moveSelected(int delta) {
+        int from = selected, to = selected + delta;
+        if (from < 0 || to < 0 || to >= apps.size()) return;
+        ResolveInfo a = apps.get(from), b = apps.get(to);
+        Collections.swap(apps, from, to);
+        Collections.swap(allApps, allApps.indexOf(a), allApps.indexOf(b));
+        row.getAdapter().notifyItemMoved(from, to);
+        selected = to;
+        row.scrollToPosition(to);
+        row.post(() -> {
+            RecyclerView.ViewHolder vh = row.findViewHolderForAdapterPosition(to);
+            if (vh != null) vh.itemView.requestFocus();
+        });
+    }
+
+    private void setTab(boolean tools) {
+        if (reorderMode) endReorder();
+        toolsTab = tools;
+        applyTab();
+        selected = -1;
+        row.getAdapter().notifyDataSetChanged();
+        styleTabs();
+        if (apps.isEmpty()) title.setText("");
+        row.post(() -> {
+            RecyclerView.ViewHolder vh = row.findViewHolderForAdapterPosition(0);
+            if (vh != null) vh.itemView.requestFocus();
+        });
+    }
+
+    private void styleTabs() {
+        tabApps.setTextColor(toolsTab ? 0x99FFFFFF : Color.WHITE);
+        tabTools.setTextColor(toolsTab ? Color.WHITE : 0x99FFFFFF);
+    }
+
+    private void go(String action) {
+        try {
+            startActivity(new Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void openInputs() {
+        try {
+            startActivity(new Intent("com.android.tv.action.VIEW_INPUTS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            Intent i = pm.getLaunchIntentForPackage("com.mediatek.wwtv.tvcenter");
+            if (i != null) startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
+    }
+
+    private void cleanMemory() {
+        android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        if (am == null) return;
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        final long before = mi.availMem;
+        for (ResolveInfo r : allApps) {
+            String p = r.activityInfo.packageName;
+            if (p.equals(getPackageName())) continue;
+            android.content.pm.ApplicationInfo ai = r.activityInfo.applicationInfo;
+            boolean system = (ai.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                    && (ai.flags & android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+            if (system) continue;
+            try { am.killBackgroundProcesses(p); } catch (RuntimeException ignored) { }
+        }
+        cache.clear();
+        try {
+            File[] fs = getCacheDir().listFiles();
+            if (fs != null) for (File f : fs) f.delete();
+        } catch (RuntimeException ignored) { }
+        h.postDelayed(() -> {
+            android.app.ActivityManager.MemoryInfo m2 = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(m2);
+            long now = m2.availMem / (1024 * 1024);
+            long freed = Math.max(0, (m2.availMem - before) / (1024 * 1024));
+            android.widget.Toast.makeText(this, "Selesai. Memori bebas " + now + " MB (+" + freed + " MB)",
+                    android.widget.Toast.LENGTH_LONG).show();
+        }, 1500);
+    }
+
+    private TextView pill(String label, Runnable r) {
+        TextView t = text(15, Color.WHITE, true);
+        t.setText(label);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(18), dp(8), dp(18), dp(8));
+        t.setBackground(round(0x33FFFFFF, 20));
+        t.setFocusable(true);
+        t.setClickable(true);
+        t.setOnFocusChangeListener((v, f) -> {
+            t.setBackground(round(f ? 0xFFFFFFFF : 0x33FFFFFF, 20));
+            t.setTextColor(f ? 0xFF111111 : Color.WHITE);
+        });
+        t.setOnClickListener(v -> r.run());
+        return t;
+    }
+
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent e) {
+        if (reorderMode && e.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+            int k = e.getKeyCode();
+            if (k == android.view.KeyEvent.KEYCODE_DPAD_LEFT) { moveSelected(-1); return true; }
+            if (k == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) { moveSelected(1); return true; }
+            if (k == android.view.KeyEvent.KEYCODE_DPAD_CENTER || k == android.view.KeyEvent.KEYCODE_ENTER
+                    || k == android.view.KeyEvent.KEYCODE_BACK) { endReorder(); return true; }
+            if (k == android.view.KeyEvent.KEYCODE_DPAD_UP || k == android.view.KeyEvent.KEYCODE_DPAD_DOWN) return true;
+        }
+        return super.dispatchKeyEvent(e);
     }
 
     private void open(int pos) {
@@ -175,7 +329,10 @@ public class Ps5Activity extends Activity {
                 iv.setForeground(has ? ring(10) : null);
                 if (has) select(vh.getAdapterPosition());
             });
-            f.setOnClickListener(v -> open(vh.getAdapterPosition()));
+            f.setOnClickListener(v -> {
+                if (reorderMode) endReorder(); else open(vh.getAdapterPosition());
+            });
+            f.setOnLongClickListener(v -> { startReorder(); return reorderMode; });
         }
 
         @Override public int getItemCount() { return apps.size(); }
@@ -185,6 +342,9 @@ public class Ps5Activity extends Activity {
         super.onCreate(b);
         pm = getPackageManager();
         d = getResources().getDisplayMetrics().density;
+        prefs = getSharedPreferences("ps5", MODE_PRIVATE);
+        String sv = prefs.getString("order", "");
+        if (!sv.isEmpty()) saved = new ArrayList<>(Arrays.asList(sv.split(",")));
         loadApps();
 
         FrameLayout root = new FrameLayout(this);
@@ -204,6 +364,19 @@ public class Ps5Activity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2);
         lp.setMargins(dp(40), dp(28), dp(40), 0);
         root.addView(left, lp);
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        tp.setMargins(0, dp(30), dp(48), 0);
+        root.addView(top, tp);
+        String[] names = {"Input", "Wi-Fi", "Pindah", "Setelan", "Bersihkan"};
+        Runnable[] acts = {this::openInputs, () -> go("android.settings.WIFI_SETTINGS"),
+                this::startReorder, () -> go("android.settings.SETTINGS"), this::cleanMemory};
+        for (int i = 0; i < 5; i++) {
+            LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-2, -2);
+            pl.leftMargin = dp(10);
+            top.addView(pill(names[i], acts[i]), pl);
+        }
 
         row = new RecyclerView(this);
         row.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
@@ -212,6 +385,25 @@ public class Ps5Activity extends Activity {
         row.setClipChildren(false);
         row.setClipToPadding(false);
         row.setPadding(dp(8), dp(16), dp(8), dp(16));
+        tabApps = text(20, Color.WHITE, true);
+        tabApps.setText("Aplikasi");
+        tabTools = text(20, Color.WHITE, true);
+        tabTools.setText("Alat");
+        TextView[] tb = {tabApps, tabTools};
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        for (int k = 0; k < 2; k++) {
+            TextView t = tb[k];
+            final boolean tools = k == 1;
+            t.setPadding(dp(18), dp(6), dp(18), dp(6));
+            t.setFocusable(true);
+            t.setClickable(true);
+            t.setOnClickListener(v -> setTab(tools));
+            t.setOnFocusChangeListener((v, f) -> t.setBackground(f ? round(0x33FFFFFF, 18) : null));
+            tabs.addView(t);
+        }
+        left.addView(tabs, new LinearLayout.LayoutParams(-2, dp(44)));
+        styleTabs();
         left.addView(row, new LinearLayout.LayoutParams(-1, dp(120)));
 
         left.addView(new View(this), new LinearLayout.LayoutParams(-1, dp(70)));
