@@ -351,6 +351,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            java.io.File flag = new java.io.File(getExternalFilesDir(null), "ps5.on");
+            if (flag.isFile()) {
+                startActivity(new Intent(this, Ps5Activity.class));
+                finish();
+                return;
+            }
+        } catch (RuntimeException ignored) { }
         setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
